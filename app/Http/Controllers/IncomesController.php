@@ -6,11 +6,34 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 use App\Models\Incomes;
 use App\Models\Categories;
 
 class IncomesController extends Controller
 {
+    // Helper method untuk cek apakah sudah lebih dari 24 jam
+    private function isExpired($income)
+    {
+        $createdAt = Carbon::parse($income->created_at);
+        $now = Carbon::now();
+        return $now->diffInHours($createdAt) >= 24;
+    }
+
+    // Helper method untuk mendapatkan sisa waktu
+    private function getRemainingTime($income)
+    {
+        $createdAt = Carbon::parse($income->created_at);
+        $expiry = $createdAt->addHours(24);
+        $now = Carbon::now();
+        
+        if ($now->greaterThan($expiry)) {
+            return null;
+        }
+        
+        return $expiry->diff($now);
+    }
+
     // Halaman List Pemasukan
     public function index(Request $request)
     {
@@ -37,7 +60,7 @@ class IncomesController extends Controller
 
         $incomes = $query->orderBy('date', 'desc')->paginate(10);
         $categories = Categories::getAll();
-
+        
         return view('dashboard.incomes.list', compact('incomes', 'categories'));
     }
 
@@ -100,7 +123,7 @@ class IncomesController extends Controller
             if ($request->hasFile('proof_image')) {
                 $file = $request->file('proof_image');
                 $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
-
+                
                 // Simpan ke storage/app/public/incomes
                 $file->storeAs('incomes', $filename, 'public');
                 $data['proof_image'] = $filename;
@@ -117,6 +140,7 @@ class IncomesController extends Controller
                     ->with('error', 'Terjadi kesalahan saat menambahkan data')
                     ->withInput();
             }
+
         } catch (\Exception $e) {
             return redirect()->back()
                 ->with('error', 'Terjadi kesalahan sistem')
@@ -134,26 +158,38 @@ class IncomesController extends Controller
     public function show($id)
     {
         $income = Incomes::getById($id);
-
+        
         if (!$income) {
             return redirect()->route('incomes')
                 ->with('error', 'Data pemasukan tidak ditemukan');
         }
+
+        // Tambahkan info apakah expired atau tidak
+        $income->is_expired = $this->isExpired($income);
+        $income->remaining_time = $this->getRemainingTime($income);
 
         return view('dashboard.incomes.show', compact('income'));
     }
 
-    // Halaman Edit Pemasukan
+    // Halaman Edit Pemasukan dengan validasi 24 jam
     public function edit($id)
     {
         $income = Incomes::getById($id);
-
+        
         if (!$income) {
             return redirect()->route('incomes')
                 ->with('error', 'Data pemasukan tidak ditemukan');
         }
 
+        // Cek apakah sudah lebih dari 24 jam
+        if ($this->isExpired($income)) {
+            return redirect()->route('incomes')
+                ->with('error', 'Tidak dapat mengedit data yang sudah lebih dari 24 jam!');
+        }
+
         $categories = Categories::getAll();
+        $income->remaining_time = $this->getRemainingTime($income);
+        
         return view('dashboard.incomes.edit', compact('income', 'categories'));
     }
 
@@ -163,14 +199,20 @@ class IncomesController extends Controller
         return $this->edit($id);
     }
 
-    // Update Pemasukan
+    // Update Pemasukan dengan validasi 24 jam
     public function update(Request $request, $id)
     {
         $income = Incomes::find($id);
-
+        
         if (!$income) {
             return redirect()->route('incomes')
                 ->with('error', 'Data pemasukan tidak ditemukan');
+        }
+
+        // Cek apakah sudah lebih dari 24 jam
+        if ($this->isExpired($income)) {
+            return redirect()->route('incomes')
+                ->with('error', 'Tidak dapat mengupdate data yang sudah lebih dari 24 jam!');
         }
 
         // Validasi input
@@ -221,7 +263,7 @@ class IncomesController extends Controller
 
                 $file = $request->file('proof_image');
                 $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
-
+                
                 $file->storeAs('incomes', $filename, 'public');
                 $data['proof_image'] = $filename;
             }
@@ -244,6 +286,7 @@ class IncomesController extends Controller
                     ->with('error', 'Terjadi kesalahan saat memperbarui data')
                     ->withInput();
             }
+
         } catch (\Exception $e) {
             return redirect()->back()
                 ->with('error', 'Terjadi kesalahan sistem')
@@ -251,15 +294,21 @@ class IncomesController extends Controller
         }
     }
 
-    // Hapus Pemasukan
+    // Hapus Pemasukan dengan validasi 24 jam
     public function destroy($id)
     {
         try {
             $income = Incomes::find($id);
-
+            
             if (!$income) {
                 return redirect()->route('incomes')
                     ->with('error', 'Data pemasukan tidak ditemukan');
+            }
+
+            // Cek apakah sudah lebih dari 24 jam
+            if ($this->isExpired($income)) {
+                return redirect()->route('incomes')
+                    ->with('error', 'Tidak dapat menghapus data yang sudah lebih dari 24 jam!');
             }
 
             $description = $income->description;
@@ -272,6 +321,7 @@ class IncomesController extends Controller
                 return redirect()->route('incomes')
                     ->with('error', 'Terjadi kesalahan saat menghapus data');
             }
+
         } catch (\Exception $e) {
             return redirect()->route('incomes')
                 ->with('error', 'Terjadi kesalahan sistem');
@@ -284,17 +334,88 @@ class IncomesController extends Controller
         return $this->destroy($id);
     }
 
+    // API method untuk cek status 24 jam (AJAX)
+    public function checkIncomeStatus($id)
+    {
+        $income = Incomes::find($id);
+        
+        if (!$income) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Data tidak ditemukan'
+            ], 404);
+        }
+
+        $isExpired = $this->isExpired($income);
+        $remainingTime = $this->getRemainingTime($income);
+        
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'id' => $income->id_income,
+                'is_expired' => $isExpired,
+                'can_edit' => !$isExpired,
+                'can_delete' => !$isExpired,
+                'created_at' => $income->created_at,
+                'remaining_time' => $remainingTime ? [
+                    'hours' => $remainingTime->h,
+                    'minutes' => $remainingTime->i,
+                    'seconds' => $remainingTime->s,
+                    'formatted' => $remainingTime->format('%H:%I:%S')
+                ] : null
+            ]
+        ]);
+    }
+
+    // API method untuk bulk check status
+    public function checkAllIncomesStatus(Request $request)
+    {
+        $incomeIds = $request->input('income_ids', []);
+        
+        if (empty($incomeIds)) {
+            $incomes = Incomes::orderBy('created_at', 'desc')->limit(50)->get();
+        } else {
+            $incomes = Incomes::whereIn('id_income', $incomeIds)->get();
+        }
+        
+        $result = [];
+        
+        foreach ($incomes as $income) {
+            $isExpired = $this->isExpired($income);
+            $remainingTime = $this->getRemainingTime($income);
+            
+            $result[] = [
+                'id' => $income->id_income,
+                'is_expired' => $isExpired,
+                'can_edit' => !$isExpired,
+                'can_delete' => !$isExpired,
+                'created_at' => $income->created_at,
+                'remaining_time' => $remainingTime ? [
+                    'hours' => $remainingTime->h,
+                    'minutes' => $remainingTime->i,
+                    'seconds' => $remainingTime->s,
+                    'total_seconds' => $remainingTime->s + ($remainingTime->i * 60) + ($remainingTime->h * 3600)
+                ] : null
+            ];
+        }
+        
+        return response()->json([
+            'status' => 'success',
+            'data' => $result
+        ]);
+    }
+
     // Download Proof Image
     public function downloadProof($id)
     {
         $income = Incomes::find($id);
-
+        
         if (!$income || !$income->proof_image) {
             abort(404, 'Gambar tidak ditemukan');
         }
 
         $filePath = storage_path('app/public/incomes/' . $income->proof_image);
-
+        
         if (!file_exists($filePath)) {
             abort(404, 'File tidak ditemukan');
         }

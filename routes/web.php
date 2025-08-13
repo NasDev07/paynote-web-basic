@@ -42,6 +42,8 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('incomes/delete/{id}', [IncomesController::class, 'destroy'])->name('incomes.delete');
     Route::get('incomes/{id}/download-proof', [IncomesController::class, 'downloadProof'])->name('incomes.download-proof');
     Route::get('incomes/api/data', [IncomesController::class, 'apiData'])->name('incomes.api.data');
+    Route::get('incomes/api/status/{id}', [IncomesController::class, 'checkIncomeStatus'])->name('incomes.api.status');
+    Route::post('incomes/api/status/bulk', [IncomesController::class, 'checkAllIncomesStatus'])->name('incomes.api.status.bulk');
 });
 
 // Expenses
