@@ -4,73 +4,186 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
 
 class Expenses extends Model
 {
+    use HasFactory;
+
     // Inisialisasi Tabel
     protected $table = 'expenses';
-    public $timestamps = false;
+    protected $primaryKey = 'id_expense';
+    public $timestamps = true;
 
     // Fill Tabel
     protected $fillable = [
-        'amount', 'description', 'date', 'id_category', 'created_at'
+        'amount',
+        'description',
+        'date',
+        'id_category',
+        'receipt_image',
+        'created_at',
+        'updated_at'
     ];
+
+    // Cast attributes
+    protected $casts = [
+        'amount' => 'decimal:2',
+        'date' => 'date',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime'
+    ];
+
+    // Relationship dengan Categories
+    public function category()
+    {
+        return $this->belongsTo(Categories::class, 'id_category', 'id_category');
+    }
+
+    // Accessor untuk receipt image URL
+    public function getReceiptImageUrlAttribute()
+    {
+        if ($this->receipt_image) {
+            return Storage::url('receipts/' . $this->receipt_image);
+        }
+        return null;
+    }
+
+    // Get All Data dengan relasi
+    public static function getAllWithCategory()
+    {
+        return self::with('category')->orderBy('date', 'desc')->get();
+    }
 
     // Get All Data
     public static function getAll()
     {
-        return Expenses::all();
+        return self::orderBy('date', 'desc')->get();
     }
 
     // Get Data by ID
     public static function getById($id)
     {
-        return Expenses::where('id_expense', $id)->first();
+        return self::with('category')->where('id_expense', $id)->first();
     }
 
     // Insert Data
     public static function insert($data)
     {
-        // Ambil amount dari $data
-        $amount = $data['amount'];
+        try {
+            // Ambil amount dari $data
+            $amount = $data['amount'];
 
-        // tambahkan description ke tabel balance
-        $description = "Pengeluaran";
+            // tambahkan data ke tabel balance jika model Balance ada
+            if (class_exists('App\Models\Balance')) {
+                $balance = Balance::create([
+                    'amount' => -1 * $amount,
+                    'updated_at' => now()
+                ]);
 
-        // tambahkan data ke tabel balance
-        $balance = Balance::create([
-            // Kurangi jumlah balance dengan amount dari $data
-            'amount' => -1 * $amount,
-            'updated_at' => date('Y-m-d H:i:s')
-        ]);
+                if (!$balance) {
+                    return false;
+                }
+            }
 
-        // Jika penambahan data ke tabel balance berhasil
-        if ($balance) {
-            // Tambahkan data ke tabel Incomes
-            $expense = Expenses::create($data);
+            // Tambahkan data ke tabel Expenses
+            $expense = self::create($data);
             return $expense;
+        } catch (\Exception $e) {
+            return false;
         }
+    }
 
-        // Jika penambahan data ke tabel balance gagal, return false
-        return false;
+    // Update Data
+    public static function updateData($id, $data)
+    {
+        try {
+            $expense = self::find($id);
+            if (!$expense) {
+                return false;
+            }
+
+            // Jika amount berubah, update balance
+            if (class_exists('App\Models\Balance') && isset($data['amount']) && $expense->amount != $data['amount']) {
+                $difference = $data['amount'] - $expense->amount;
+                Balance::create([
+                    'amount' => -1 * $difference,
+                    'updated_at' => now()
+                ]);
+            }
+
+            return $expense->update($data);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    // Delete Data
+    public static function deleteData($id)
+    {
+        try {
+            $expense = self::find($id);
+            if (!$expense) {
+                return false;
+            }
+
+            // Hapus gambar jika ada
+            if ($expense->receipt_image) {
+                Storage::delete('receipts/' . $expense->receipt_image);
+            }
+
+            // Update balance (kembalikan amount yang sudah dikeluarkan)
+            if (class_exists('App\Models\Balance')) {
+                Balance::create([
+                    'amount' => $expense->amount, // Positif karena mengembalikan
+                    'updated_at' => now()
+                ]);
+            }
+
+            return $expense->delete();
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     // Total Pengeluaran
     public static function totalExpenses()
     {
-        // Ambil semua data dari model
-        $expenses = Expenses::all();
+        return self::sum('amount');
+    }
 
-        // Set variabel total_expenses
-        $total_expenses = 0;
+    // Total Pengeluaran berdasarkan kategori
+    public static function totalByCategory($categoryId = null)
+    {
+        $query = self::query();
 
-        // Looping data
-        foreach ($expenses as $expense) {
-            // Tambahkan amount ke variabel total_expenses
-            $total_expenses += $expense->amount;
+        if ($categoryId) {
+            $query->where('id_category', $categoryId);
         }
 
-        // Return total_expenses
-        return $total_expenses;
+        return $query->sum('amount');
+    }
+
+    // Pengeluaran per bulan
+    public static function monthlyExpenses($year = null, $month = null)
+    {
+        $year = $year ?: date('Y');
+        $month = $month ?: date('m');
+
+        return self::whereYear('date', $year)
+            ->whereMonth('date', $month)
+            ->sum('amount');
+    }
+
+    // Scope untuk filter berdasarkan tanggal
+    public function scopeByDateRange($query, $startDate, $endDate)
+    {
+        return $query->whereBetween('date', [$startDate, $endDate]);
+    }
+
+    // Scope untuk filter berdasarkan kategori
+    public function scopeByCategory($query, $categoryId)
+    {
+        return $query->where('id_category', $categoryId);
     }
 }
