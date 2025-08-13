@@ -55,6 +55,8 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('expenses/delete/{id}', [ExpensesController::class, 'destroy'])->name('expenses.delete');
     Route::get('expenses/{id}/download-receipt', [ExpensesController::class, 'downloadReceipt'])->name('expenses.download-receipt');
     Route::get('expenses/api/data', [ExpensesController::class, 'apiData'])->name('expenses.api.data');
+    Route::get('expenses/api/status/{id}', [ExpensesController::class, 'checkExpenseStatus'])->name('expenses.api.status');
+    Route::post('expenses/api/status/bulk', [ExpensesController::class, 'checkAllExpensesStatus'])->name('expenses.api.status.bulk');
 });
 
 // Dashboard Route

@@ -6,12 +6,35 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 use App\Models\Expenses;
 use App\Models\Categories;
 
 class ExpensesController extends Controller
 {
-    // Halaman List Pengeluaran (method lama)
+    // Helper method untuk cek apakah sudah lebih dari 24 jam
+    private function isExpired($expense)
+    {
+        $createdAt = Carbon::parse($expense->created_at);
+        $now = Carbon::now();
+        return $now->diffInHours($createdAt) >= 24;
+    }
+
+    // Helper method untuk mendapatkan sisa waktu
+    private function getRemainingTime($expense)
+    {
+        $createdAt = Carbon::parse($expense->created_at);
+        $expiry = $createdAt->addHours(24);
+        $now = Carbon::now();
+        
+        if ($now->greaterThan($expiry)) {
+            return null;
+        }
+        
+        return $expiry->diff($now);
+    }
+
+    // Halaman List Pengeluaran
     public function index(Request $request)
     {
         $query = Expenses::with('category');
@@ -41,7 +64,7 @@ class ExpensesController extends Controller
         return view('dashboard.expenses.list', compact('expenses', 'categories'));
     }
 
-    // Halaman Tambah Pengeluaran (ubah dari addPage ke create untuk konsistensi)
+    // Halaman Tambah Pengeluaran (create method)
     public function create()
     {
         $categories = Categories::getAll();
@@ -54,7 +77,7 @@ class ExpensesController extends Controller
         return $this->create();
     }
 
-    // Tambah Pengeluaran (ubah dari insert ke store)
+    // Tambah Pengeluaran (store method)
     public function store(Request $request)
     {
         // Validasi input
@@ -131,7 +154,7 @@ class ExpensesController extends Controller
         return $this->store($request);
     }
 
-    // Halaman Detail Pengeluaran (BARU)
+    // Halaman Detail Pengeluaran
     public function show($id)
     {
         $expense = Expenses::getById($id);
@@ -141,10 +164,14 @@ class ExpensesController extends Controller
                 ->with('error', 'Data pengeluaran tidak ditemukan');
         }
 
+        // Tambahkan info apakah expired atau tidak
+        $expense->is_expired = $this->isExpired($expense);
+        $expense->remaining_time = $this->getRemainingTime($expense);
+
         return view('dashboard.expenses.show', compact('expense'));
     }
 
-    // Halaman Edit Pengeluaran (ubah dari editPage ke edit)
+    // Halaman Edit Pengeluaran dengan validasi 24 jam
     public function edit($id)
     {
         $expense = Expenses::getById($id);
@@ -154,7 +181,15 @@ class ExpensesController extends Controller
                 ->with('error', 'Data pengeluaran tidak ditemukan');
         }
 
+        // Cek apakah sudah lebih dari 24 jam
+        if ($this->isExpired($expense)) {
+            return redirect()->route('expenses')
+                ->with('error', 'Tidak dapat mengedit data yang sudah lebih dari 24 jam!');
+        }
+
         $categories = Categories::getAll();
+        $expense->remaining_time = $this->getRemainingTime($expense);
+        
         return view('dashboard.expenses.edit', compact('expense', 'categories'));
     }
 
@@ -164,7 +199,7 @@ class ExpensesController extends Controller
         return $this->edit($id);
     }
 
-    // Update Pengeluaran
+    // Update Pengeluaran dengan validasi 24 jam
     public function update(Request $request, $id)
     {
         $expense = Expenses::find($id);
@@ -172,6 +207,12 @@ class ExpensesController extends Controller
         if (!$expense) {
             return redirect()->route('expenses')
                 ->with('error', 'Data pengeluaran tidak ditemukan');
+        }
+
+        // Cek apakah sudah lebih dari 24 jam
+        if ($this->isExpired($expense)) {
+            return redirect()->route('expenses')
+                ->with('error', 'Tidak dapat mengupdate data yang sudah lebih dari 24 jam!');
         }
 
         // Validasi input
@@ -253,7 +294,7 @@ class ExpensesController extends Controller
         }
     }
 
-    // Hapus Pengeluaran (ubah dari delete ke destroy)
+    // Hapus Pengeluaran dengan validasi 24 jam
     public function destroy($id)
     {
         try {
@@ -262,6 +303,12 @@ class ExpensesController extends Controller
             if (!$expense) {
                 return redirect()->route('expenses')
                     ->with('error', 'Data pengeluaran tidak ditemukan');
+            }
+
+            // Cek apakah sudah lebih dari 24 jam
+            if ($this->isExpired($expense)) {
+                return redirect()->route('expenses')
+                    ->with('error', 'Tidak dapat menghapus data yang sudah lebih dari 24 jam!');
             }
 
             $description = $expense->description;
@@ -287,7 +334,78 @@ class ExpensesController extends Controller
         return $this->destroy($id);
     }
 
-    // Download Receipt Image (BARU)
+    // API method untuk cek status 24 jam (AJAX)
+    public function checkExpenseStatus($id)
+    {
+        $expense = Expenses::find($id);
+        
+        if (!$expense) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Data tidak ditemukan'
+            ], 404);
+        }
+
+        $isExpired = $this->isExpired($expense);
+        $remainingTime = $this->getRemainingTime($expense);
+        
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'id' => $expense->id_expense,
+                'is_expired' => $isExpired,
+                'can_edit' => !$isExpired,
+                'can_delete' => !$isExpired,
+                'created_at' => $expense->created_at,
+                'remaining_time' => $remainingTime ? [
+                    'hours' => $remainingTime->h,
+                    'minutes' => $remainingTime->i,
+                    'seconds' => $remainingTime->s,
+                    'formatted' => $remainingTime->format('%H:%I:%S')
+                ] : null
+            ]
+        ]);
+    }
+
+    // API method untuk bulk check status
+    public function checkAllExpensesStatus(Request $request)
+    {
+        $expenseIds = $request->input('expense_ids', []);
+        
+        if (empty($expenseIds)) {
+            $expenses = Expenses::orderBy('created_at', 'desc')->limit(50)->get();
+        } else {
+            $expenses = Expenses::whereIn('id_expense', $expenseIds)->get();
+        }
+        
+        $result = [];
+        
+        foreach ($expenses as $expense) {
+            $isExpired = $this->isExpired($expense);
+            $remainingTime = $this->getRemainingTime($expense);
+            
+            $result[] = [
+                'id' => $expense->id_expense,
+                'is_expired' => $isExpired,
+                'can_edit' => !$isExpired,
+                'can_delete' => !$isExpired,
+                'created_at' => $expense->created_at,
+                'remaining_time' => $remainingTime ? [
+                    'hours' => $remainingTime->h,
+                    'minutes' => $remainingTime->i,
+                    'seconds' => $remainingTime->s,
+                    'total_seconds' => $remainingTime->s + ($remainingTime->i * 60) + ($remainingTime->h * 3600)
+                ] : null
+            ];
+        }
+        
+        return response()->json([
+            'status' => 'success',
+            'data' => $result
+        ]);
+    }
+
+    // Download Receipt Image
     public function downloadReceipt($id)
     {
         $expense = Expenses::find($id);
@@ -305,7 +423,7 @@ class ExpensesController extends Controller
         return response()->download($filePath);
     }
 
-    // API untuk mendapatkan data pengeluaran (BARU - untuk AJAX/Chart)
+    // API untuk mendapatkan data pengeluaran (untuk AJAX/Chart)
     public function apiData(Request $request)
     {
         $query = Expenses::with('category');
