@@ -34,11 +34,14 @@ Route::group(['middleware' => ['auth']], function () {
 // Incomes
 Route::middleware(['auth'])->group(function () {
     Route::get('incomes', [IncomesController::class, 'index'])->name('incomes');
-    Route::get('incomes/add', [IncomesController::class, 'addPage'])->name('incomes.addPage');
-    Route::post('incomes/insert', [IncomesController::class, 'insert'])->name('incomes.insert');
-    Route::get('incomes/edit/{id}', [IncomesController::class, 'editPage'])->name('incomes.editPage');
+    Route::get('incomes/add', [IncomesController::class, 'create'])->name('incomes.addPage');
+    Route::post('incomes/insert', [IncomesController::class, 'store'])->name('incomes.insert');
+    Route::get('incomes/show/{id}', [IncomesController::class, 'show'])->name('incomes.show');
+    Route::get('incomes/edit/{id}', [IncomesController::class, 'edit'])->name('incomes.editPage');
     Route::put('incomes/update/{id}', [IncomesController::class, 'update'])->name('incomes.update');
-    Route::get('incomes/delete/{id}', [IncomesController::class, 'delete'])->name('incomes.delete');
+    Route::delete('incomes/delete/{id}', [IncomesController::class, 'destroy'])->name('incomes.delete');
+    Route::get('incomes/{id}/download-proof', [IncomesController::class, 'downloadProof'])->name('incomes.download-proof');
+    Route::get('incomes/api/data', [IncomesController::class, 'apiData'])->name('incomes.api.data');
 });
 
 // Expenses

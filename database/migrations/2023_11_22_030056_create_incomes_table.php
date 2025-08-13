@@ -13,12 +13,18 @@ return new class extends Migration
     {
         Schema::create('incomes', function (Blueprint $table) {
             $table->id('id_income');
-            $table->decimal('amount', 8, 2);
+            $table->decimal('amount', 15, 2);
             $table->date('date');
             $table->timestamp('created_at')->useCurrent();
-            $table->string('description', 255);
+            $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate();
+            $table->text('description');
+            $table->string('proof_image')->nullable(); // Field untuk gambar bukti income
             $table->unsignedBigInteger('id_category');
             $table->foreign('id_category')->references('id_category')->on('categories');
+            
+            // Index untuk performa
+            $table->index(['date']);
+            $table->index(['id_category']);
         });
     }
 
